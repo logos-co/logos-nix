@@ -12,6 +12,7 @@ Previously, [`logos-cpp-sdk`](https://github.com/logos-co/logos-cpp-sdk) served 
 | `devShells.default` | Common dev environment: `cmake`, `ninja`, `pkg-config`, `qt6.qtbase`, `qt6.qtremoteobjects` |
 | `lib.forAllSystems` | Helper to generate outputs for all supported systems |
 | `lib.supportedSystems` | `aarch64-darwin`, `x86_64-darwin`, `aarch64-linux`, `x86_64-linux` |
+| `lib.overlays.fetchCargoVendorUserAgent` | Makes `rustPlatform.fetchCargoVendor` send a User-Agent on the current pin (crates.io 403s python-requests' default). Applied by `forAllSystems`/`forAllTargets`/`legacyPackages`; a consumer that does its own `import nixpkgs` must add it to `overlays` itself. See `nix/overlays/fetch-cargo-vendor-user-agent.nix`. |
 
 ## Usage
 

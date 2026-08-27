@@ -70,6 +70,15 @@
       windowsCrossOverlay = import ./nix/windows/cross-overlay.nix;
       windowsNativeOverlay = import ./nix/windows/native-overlay.nix;
 
+      # Native (Linux/macOS) package set on the workspace pin. Carries the
+      # fetchCargoVendor User-Agent fix until the pin is bumped past
+      # NixOS/nixpkgs#512735; see nix/overlays/fetch-cargo-vendor-user-agent.nix.
+      # Not applied to the Windows set: nixpkgs-windows already contains the
+      # upstream fix.
+      fetchCargoVendorUserAgentOverlay = import ./nix/overlays/fetch-cargo-vendor-user-agent.nix;
+      nativeOverlays = [ fetchCargoVendorUserAgentOverlay ];
+      mkNativePkgs = system: import nixpkgs { inherit system; overlays = nativeOverlays; };
+
       # Package set targeting Windows, built FROM `buildSystem`.
       #
       # Uses `nixpkgs-windows` (Qt 6.11.1), NOT the workspace pin — see the
@@ -101,7 +110,7 @@
         nixpkgs.lib.genAttrs supportedSystems (system:
           f {
             inherit system;
-            pkgs = import nixpkgs { inherit system; };
+            pkgs = mkNativePkgs system;
           });
 
       # forAllSystems, plus the Windows target keyed under the pseudo-system
@@ -125,7 +134,7 @@
           else
             f {
               inherit system;
-              pkgs = import nixpkgs { inherit system; };
+              pkgs = mkNativePkgs system;
             });
     in
     {
@@ -142,12 +151,13 @@
         overlays = {
           windows = windowsCrossOverlay;
           windowsNative = windowsNativeOverlay;
+          fetchCargoVendorUserAgent = fetchCargoVendorUserAgentOverlay;
         };
       };
 
       # nix build .#legacyPackages.x86_64-linux.pkgsWindows.qt6.qtbase
       legacyPackages = nixpkgs.lib.genAttrs supportedSystems (system:
-        (import nixpkgs { inherit system; }) // {
+        (mkNativePkgs system) // {
           pkgsWindows = mkWindowsPkgs { buildSystem = system; };
         });
 
