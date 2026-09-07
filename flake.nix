@@ -71,12 +71,16 @@
       windowsNativeOverlay = import ./nix/windows/native-overlay.nix;
 
       # Native (Linux/macOS) package set on the workspace pin. Carries the
-      # fetchCargoVendor User-Agent fix until the pin is bumped past
-      # NixOS/nixpkgs#512735; see nix/overlays/fetch-cargo-vendor-user-agent.nix.
+      # crates.io 403 fixes until the pin is bumped past NixOS/nixpkgs#512735
+      # and #524979; see the two overlays under nix/overlays/.
       # Not applied to the Windows set: nixpkgs-windows already contains the
       # upstream fix.
       fetchCargoVendorUserAgentOverlay = import ./nix/overlays/fetch-cargo-vendor-user-agent.nix;
-      nativeOverlays = [ fetchCargoVendorUserAgentOverlay ];
+      importCargoLockStaticCratesIoOverlay = import ./nix/overlays/import-cargo-lock-static-crates-io.nix;
+      nativeOverlays = [
+        fetchCargoVendorUserAgentOverlay
+        importCargoLockStaticCratesIoOverlay
+      ];
       mkNativePkgs = system: import nixpkgs { inherit system; overlays = nativeOverlays; };
 
       # Package set targeting Windows, built FROM `buildSystem`.
@@ -152,6 +156,7 @@
           windows = windowsCrossOverlay;
           windowsNative = windowsNativeOverlay;
           fetchCargoVendorUserAgent = fetchCargoVendorUserAgentOverlay;
+          importCargoLockStaticCratesIo = importCargoLockStaticCratesIoOverlay;
         };
       };
 
