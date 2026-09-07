@@ -100,6 +100,77 @@
           crossOverlays = [ iosCrossOverlay ];
         };
 
+      # Android target. Same cross pin as Windows (Qt 6.11.1); see
+      # nix/android/cross-overlay.nix. arm64-v8a only in this slice -- one ABI is
+      # one pseudo-system, because the NDK triple, the nixpkgs crossSystem and
+      # every Qt library are per-ABI.
+      androidAbi = "arm64-v8a";
+
+      # Qt 6.11 defaults to and requires API 28 (QtAutoDetectHelpers.cmake picks
+      # android-28 when nothing else asks). The same number is `androidSdkVersion`
+      # on the cross system, which nixpkgs bakes into
+      # `--target=aarch64-linux-android<N>` for every target dependency -- Qt and
+      # its deps have to agree on it or the app links against symbols its own
+      # minSdk does not promise.
+      androidApiLevel = "28";
+
+      # Compile-time SDK: the android.jar the Java side and androiddeployqt use.
+      # Independent of androidApiLevel, which is the runtime floor. 36 / 36.0.0
+      # are floors, not preferences: the Android Gradle Plugin that Qt 6.11's
+      # build.gradle template pins (9.0.0) refuses build-tools below 36.0.0 and
+      # then tries to install them into the read-only store.
+      androidCompileSdkVersion = "36";
+      androidBuildToolsVersion = "36.0.0";
+
+      # The version `lib.systems.examples.aarch64-android-prebuilt` pins, so
+      # `androidndkPkgs_27` and our own composition resolve the same tarball.
+      androidNdkVersion = "27.0.12077973";
+
+      androidBuildSystems = [ "x86_64-linux" "aarch64-darwin" ];
+
+      androidCrossSystem = {
+        config = "aarch64-unknown-linux-android";
+        rust.rustcTarget = "aarch64-linux-android";
+        androidSdkVersion = androidApiLevel;
+        androidNdkVersion = "27";
+        useAndroidPrebuilt = true;
+      };
+
+      # The SDK and NDK are redistributable-but-unfree Google binaries behind a
+      # click-through licence. Scoped to the Android package set only.
+      androidConfig = {
+        allowUnfree = true;
+        android_sdk.accept_license = true;
+      };
+
+      # One overlay per build platform, because it closes over the build-platform
+      # package set (host Qt, SDK, NDK).
+      mkAndroidCrossOverlay = buildSystem: import ./nix/android/cross-overlay.nix {
+        # NOT `final.pkgsBuildBuild`: under a cross set that attribute's
+        # `pkgsi686Linux` comes out with hostPlatform=aarch64-unknown-linux-android
+        # and buildPlatform=i686-linux, and androidenv's tools.nix reaches into it
+        # for the 32-bit runtime libraries the legacy SDK tools need. The result
+        # is an eval failure ("unsupported CPU i686", from openjdk) with nothing
+        # in the trace pointing at the real cause.
+        buildPkgs = import nixpkgs-windows {
+          system = buildSystem;
+          config = androidConfig;
+        };
+        abi = androidAbi;
+        apiLevel = androidApiLevel;
+        compileSdkVersion = androidCompileSdkVersion;
+        buildToolsVersion = androidBuildToolsVersion;
+        ndkVersion = androidNdkVersion;
+      };
+
+      mkAndroidPkgs =
+        { buildSystem ? "x86_64-linux" }: import nixpkgs-windows {
+          localSystem = buildSystem;
+          crossSystem = androidCrossSystem;
+          config = androidConfig;
+          crossOverlays = [ (mkAndroidCrossOverlay buildSystem) ];
+        };
+
       # Mobile pseudo-systems are OPT-IN, unlike x86_64-windows: consumers
       # that wrap forAllTargets map build systems for Windows only, and
       # `stdenv.isDarwin` is true for an iOS host, so adding these keys to
@@ -112,6 +183,10 @@
         aarch64-ios = {
           buildSystem = "aarch64-darwin";
           pkgs = mkIosPkgs { target = "aarch64-ios"; };
+        };
+        aarch64-android = {
+          buildSystem = "x86_64-linux";
+          pkgs = mkAndroidPkgs { buildSystem = "x86_64-linux"; };
         };
       };
       forAllMobileTargets = f:
@@ -205,6 +280,14 @@
           iosCrossSystems
           iosXcodeVersion
           iosXcodeBuild
+          mkAndroidPkgs
+          # A function of the build system, not a plain overlay: it closes over
+          # the build-platform SDK/NDK, so there is no one correct instance.
+          mkAndroidCrossOverlay
+          androidBuildSystems
+          androidCrossSystem
+          androidAbi
+          androidApiLevel
           mobileTargets
           forAllMobileTargets
           ;
@@ -226,11 +309,15 @@
         } // nixpkgs.lib.optionalAttrs (builtins.elem system iosBuildSystems) {
           pkgsIosSimulator = mkIosPkgs { buildSystem = system; };
           pkgsIos = mkIosPkgs { buildSystem = system; target = "aarch64-ios"; };
+        } // nixpkgs.lib.optionalAttrs (builtins.elem system androidBuildSystems) {
+          pkgsAndroid = mkAndroidPkgs { buildSystem = system; };
         });
 
       # nix build .#packages.aarch64-ios-simulator.qtbase (or aarch64-ios)
-      # Flat derivations only (flake schema); the full qt6 scope is under
-      # legacyPackages.<buildSystem>.pkgsIosSimulator / .pkgsIos like pkgsWindows.
+      # nix build .#packages.aarch64-android.qtbase
+      # Flat derivations only (flake schema); the full qt6 scope and
+      # mkQtAndroidApk are under legacyPackages.<buildSystem>.pkgsIosSimulator
+      # / .pkgsIos / .pkgsAndroid like pkgsWindows.
       packages = forAllMobileTargets ({ pkgs, ... }:
         { inherit (pkgs.qt6) qtbase qtdeclarative qtshadertools qtsvg; }
         // nixpkgs.lib.optionalAttrs (pkgs ? xcodeWrapper) { inherit (pkgs) xcodeWrapper; });
@@ -486,6 +573,126 @@
           {
             ios-overlay = assert iosGate;
               pkgs.runCommand "ios-overlay-eval-gate" { } "touch $out";
+          }
+        )
+        // lib.optionalAttrs (builtins.elem system androidBuildSystems) (
+          let
+            a = mkAndroidPkgs { buildSystem = system; };
+            androidQtModules = [ "qtbase" "qtdeclarative" "qtshadertools" "qtsvg" ];
+
+            androidInputNames =
+              map (p: p.pname or p.name or "")
+                (builtins.filter lib.isDerivation
+                  ((a.qt6.qtbase.buildInputs or [ ])
+                    ++ (a.qt6.qtbase.propagatedBuildInputs or [ ])));
+
+            androidAssertions = [
+              {
+                name = "all four Qt modules resolve";
+                ok = builtins.all (m: builtins.isString a.qt6.${m}.drvPath) androidQtModules;
+              }
+              # Qt aborts configure without the NDK's own toolchain file, and it
+              # is the one CMake variable a consumer cannot just append.
+              {
+                name = "toolchain file lives in the NDK";
+                ok = lib.hasSuffix "/build/cmake/android.toolchain.cmake" a.logosQtCrossToolchainFile;
+              }
+              {
+                name = "cross flags are appendable -D flags only";
+                ok = builtins.all (lib.hasPrefix "-D") a.logosQtCrossCmakeFlags;
+              }
+              {
+                name = "cross flags carry host Qt and the ABI";
+                ok = builtins.any (lib.hasPrefix "-DQT_HOST_PATH=") a.logosQtCrossCmakeFlags
+                  && builtins.elem "-DQT_ANDROID_ABIS=${androidAbi}" a.logosQtCrossCmakeFlags;
+              }
+              {
+                name = "qtbase targets ${androidAbi}";
+                ok = hasFlagPrefix a.qt6.qtbase "-DANDROID_ABI=${androidAbi}";
+              }
+              # Same silent failure as on Windows: aim at
+              # Qt6ShaderToolsTools (host qsb) or Qt Quick is quietly not built.
+              {
+                name = "qtdeclarative points at build-platform qsb";
+                ok = builtins.any
+                  (lib.hasSuffix "/lib/cmake/Qt6ShaderToolsTools")
+                  (a.qt6.qtdeclarative.cmakeFlags or [ ]);
+              }
+              # Every nixpkgs system library Qt links becomes a DT_NEEDED soname
+              # that androiddeployqt does not bundle and Android does not
+              # provide, so the app dies at dlopen. openssl is the exception:
+              # openssl_linked=OFF means it is dlopened, never NEEDED.
+              {
+                name = "qtbase links no system third-party libraries";
+                ok = androidInputNames == [ "openssl" ];
+              }
+              {
+                name = "qtbase uses Qt's bundled PCRE2";
+                ok = hasFlagPrefix a.qt6.qtbase "-DQT_FEATURE_system_pcre2=OFF";
+              }
+              # Qt's apple autodetect runs on any Mac host, whatever the target,
+              # and needs xcrun; without it qtbase cannot configure from darwin.
+              {
+                name = "a darwin build platform gets xcrun";
+                ok =
+                  let
+                    d = (mkAndroidPkgs { buildSystem = "aarch64-darwin"; }).qt6.qtbase;
+                  in
+                  builtins.any (p: (p.pname or "") == "xcbuild") d.nativeBuildInputs;
+              }
+              # The overlay applied to a NATIVE set must degrade to nothing --
+              # including the toolchain file, which is a plain string and so
+              # would happily keep pointing at an NDK that cannot build for the
+              # host.
+              {
+                name = "cross flags and toolchain file are empty natively";
+                ok =
+                  let
+                    n = import nixpkgs-windows {
+                      inherit system;
+                      config = androidConfig;
+                      overlays = [ (mkAndroidCrossOverlay system) ];
+                    };
+                  in
+                  n.logosQtCrossCmakeFlags == [ ]
+                  && n.logosQtCrossToolchainFile == ""
+                  && !(n ? androidPkgs)
+                  && !(n ? mkQtAndroidApk);
+              }
+              {
+                name = "mkQtAndroidApk is exposed on the cross set";
+                ok = lib.isFunction a.mkQtAndroidApk;
+              }
+              # An empty or hand-edited lockfile still evaluates and only fails
+              # deep inside gradle. Count artifacts, not repositories: a lock
+              # with `{"https://...": {}}` has the right shape and no content.
+              {
+                name = "the APK gradle lock is populated";
+                ok =
+                  let
+                    lock = removeAttrs (lib.importJSON ./nix/android/deps.json) [
+                      "!comment"
+                      "!version"
+                    ];
+                    repos = lib.attrValues lock;
+                  in
+                  repos != [ ] && builtins.all (r: builtins.isAttrs r && r != { }) repos;
+              }
+            ];
+            androidGate = lib.foldl'
+              (acc: x: acc && (lib.assertMsg x.ok "android overlay drift: ${x.name}"))
+              true
+              androidAssertions;
+          in
+          {
+            android-overlay = assert androidGate;
+              pkgs.runCommand "android-overlay-eval-gate" { } "touch $out";
+          }
+          # A real APK is the only proof that androiddeployqt, gradle and the
+          # lock still agree, but it builds Qt for Android from source, so a
+          # plain `nix flake check` on a Mac must not pick it up.
+          // lib.optionalAttrs (system == "x86_64-linux") {
+            android-apk = a.callPackage ./nix/android/check-apk { };
           }
         ));
 
