@@ -26,7 +26,10 @@ final: prev:
 let
   inherit (prev) lib;
 
-  helperPath = "${prev.path}/pkgs/build-support/rust/fetch-cargo-vendor-util.py";
+  # Path concatenation, NOT "${prev.path}/...": interpolating `pkgs.path` into a
+  # string makes `readFile` copy the whole nixpkgs tree in as a second store
+  # path, which pure evaluation cannot do on a cold store.
+  helperPath = prev.path + "/pkgs/build-support/rust/fetch-cargo-vendor-util.py";
   helperSrc = builtins.readFile helperPath;
 
   alreadyFixed = lib.hasInfix "User-Agent" helperSrc;
@@ -49,7 +52,7 @@ let
 
   patchedUtil =
     assert lib.assertMsg everyEditApplied
-      "fetch-cargo-vendor-user-agent overlay: ${helperPath} no longer matches the hunks this overlay patches; drop the overlay if the pin already sends a User-Agent, otherwise update the hunks";
+      "fetch-cargo-vendor-user-agent overlay: ${toString helperPath} no longer matches the hunks this overlay patches; drop the overlay if the pin already sends a User-Agent, otherwise update the hunks";
     # Built for the build platform, like the original (fetch-cargo-vendor.nix
     # is instantiated with `buildPackages.callPackage`).
     final.buildPackages.writers.writePython3Bin "fetch-cargo-vendor-util-ua" {
