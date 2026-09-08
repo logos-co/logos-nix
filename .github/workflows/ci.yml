@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  flake-check:
+    # ATTIC_TOKEN_PUBLIC only exists in the public-cache environment; master
+    # jobs must opt into it to publish to the public cache.
+    environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: logos-co/setup-nix-cache-action@v1
+        with:
+          attic-token-ci: ${{ secrets.ATTIC_TOKEN_CI }}
+          attic-token-public: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
+          extra-nix-config: |
+            experimental-features = nix-command flakes
+
+      # Both gates are `assert ...; runCommand "touch $out"`, so all their signal
+      # is at evaluation and --no-build loses none of it. --all-systems is the
+      # only coverage aarch64-linux and x86_64-darwin ever get. Without
+      # --no-update-lock-file an uncommitted flake.lock is silently re-locked in
+      # the workspace and the run goes green.
+      - name: Evaluate every output, for every system
+        run: nix flake check --no-build --all-systems --no-update-lock-file
+
+      # The README's other contract: a consumer applying lib.overlays.* to its
+      # own `import nixpkgs`. No flake output covers that, so a rename here
+      # passes the step above and breaks downstream instead.
+      - name: Overlays apply in a consumer's own import
+        run: |
+          # shellcheck disable=SC2016  # the quotes are load-bearing: ${...} is Nix, not shell
+          nix eval --impure --raw --expr '
+            let
+              self = builtins.getFlake (toString ./.);
+              lib = self.inputs.nixpkgs.lib;
+              o = self.lib.overlays;
+              system = builtins.currentSystem;
+              documented = [
+                "fetchCargoVendorUserAgent"
+                "importCargoLockStaticCratesIo"
+                "windows"
+                "windowsNative"
+              ];
+              consumer = import self.inputs.nixpkgs {
+                inherit system;
+                overlays = [ o.fetchCargoVendorUserAgent o.importCargoLockStaticCratesIo ];
+              };
+              ours = self.legacyPackages.${system};
+              # cargoHash and cargoLock go through different fetchers; force both.
+              vendorStaging = p: p.ripgrep.cargoDeps.vendorStaging.drvPath;
+              cargoLockDrv = p: (p.rustPlatform.importCargoLock {
+                lockFileContents = "version = 3\n\n[[package]]\nname = \"probe\"\nversion = \"0.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"0000000000000000000000000000000000000000000000000000000000000000\"\n";
+              }).drvPath;
+              # An overlay that quietly stops patching anything still satisfies
+              # the equalities below. checks.* asserts the fix for
+              # importCargoLock; nothing else covers the UA one.
+              sendsUserAgent = p:
+                lib.hasInfix "User-Agent"
+                  (builtins.readFile (p.path + "/pkgs/build-support/rust/fetch-cargo-vendor-util.py"))
+                || lib.hasInfix "fetch-cargo-vendor-util-ua"
+                  p.ripgrep.cargoDeps.vendorStaging.buildPhase;
+            in
+            assert lib.assertMsg (lib.all (n: builtins.hasAttr n o) documented)
+              "lib.overlays lost a documented name: ${toString (builtins.attrNames o)}";
+            assert lib.assertMsg (vendorStaging consumer == vendorStaging ours)
+              "fetchCargoVendorUserAgent does not apply standalone to a plain import nixpkgs";
+            assert lib.assertMsg (cargoLockDrv consumer == cargoLockDrv ours)
+              "importCargoLockStaticCratesIo does not apply standalone to a plain import nixpkgs";
+            assert lib.assertMsg (sendsUserAgent consumer)
+              "fetchCargoVendorUserAgent is a no-op: fetchCargoVendor still runs the unpatched helper";
+            "consumer overlay usage ok\n"
+          '
+
+  gate-mutations:
+    environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: logos-co/setup-nix-cache-action@v1
+        with:
+          attic-token-ci: ${{ secrets.ATTIC_TOKEN_CI }}
+          attic-token-public: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
+          extra-nix-config: |
+            experimental-features = nix-command flakes
+
+      # flake-check only proves the gates still PASS -- which a gate that has
+      # stopped discriminating also does. This replays five real overlay
+      # defects and asserts each is still rejected, by message.
+      - name: Overlay gate mutation tests
+        run: bash tests/gate-mutations.sh
