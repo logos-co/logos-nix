@@ -5,8 +5,9 @@
 # Companion to fetch-cargo-vendor-user-agent.nix, which covers the other
 # crate fetcher.
 #
-# `import-cargo-lock.nix` takes `fetchurl` as a callPackage argument, so
-# re-instantiating it with a rewriting wrapper leaves the pin untouched.
+# `.override` rather than a fresh `callPackage`: it swaps `fetchurl` into the
+# argument set the pin itself built, so the `cargo` this rustPlatform was made
+# with -- and upstream's build-platform placement -- survive untouched.
 final: prev:
 let
   inherit (prev) lib;
@@ -37,8 +38,8 @@ else
     makeRustPlatform =
       args:
       (prev.makeRustPlatform args).overrideScope (
-        _: _rprev: {
-          importCargoLock = final.callPackage importCargoLockFile { fetchurl = cdnFetchurl; };
+        _: rprev: {
+          importCargoLock = rprev.importCargoLock.override { fetchurl = cdnFetchurl; };
         }
       );
   }

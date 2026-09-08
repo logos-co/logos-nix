@@ -262,6 +262,66 @@
         {
           windows-overlay = assert gate;
             pkgs.runCommand "windows-overlay-eval-gate" { } "touch $out";
+
+          # Drift guard for the importCargoLock rewrite (the UA overlay asserts
+          # on its own hunks). Both failure modes here are silent: a rewrite
+          # that stops matching still evaluates, and so does an importCargoLock
+          # instantiated on the host platform, whose git-crate script then runs
+          # target cargo/jq on the builder.
+          import-cargo-lock-overlay =
+            let
+              apiPrefix = "https://crates.io/api/v1/crates";
+              cdnPrefix = "https://static.crates.io/crates";
+              importCargoLockFile = pkgs.path + "/pkgs/build-support/rust/import-cargo-lock.nix";
+
+              # Only the git branch uses `cargo`; only the registry branch, `fetchurl`.
+              lockArgs = {
+                lockFileContents = ''
+                  version = 3
+
+                  [[package]]
+                  name = "logos-gate-registry-probe"
+                  version = "0.0.0"
+                  source = "registry+https://github.com/rust-lang/crates.io-index"
+                  checksum = "0000000000000000000000000000000000000000000000000000000000000000"
+
+                  [[package]]
+                  name = "logos-gate-git-probe"
+                  version = "0.0.0"
+                  source = "git+https://logos.invalid/probe#0000000000000000000000000000000000000000"
+                '';
+                outputHashes."logos-gate-git-probe-0.0.0" = lib.fakeSha256;
+              };
+
+              cargoProbe = pkgs.emptyDirectory;
+              overlaid = p: (p.makeRustPlatform { cargo = cargoProbe; rustc = cargoProbe; }).importCargoLock;
+              # Must land on the same store path as `overlaid`: fetchurl is
+              # fixed-output, so rewriting its URL cannot move the vendor dir.
+              reference = p: p.buildPackages.callPackage importCargoLockFile { cargo = cargoProbe; } lockArgs;
+
+              probe = (overlaid pkgs).override (orig:
+                assert lib.assertMsg (orig.cargo.outPath == cargoProbe.outPath)
+                  "import-cargo-lock overlay drift: cargo never reaches importCargoLock";
+                {
+                  fetchurl = fetchurlArgs:
+                    let drv = orig.fetchurl fetchurlArgs; urls = toString drv.urls;
+                    in
+                    assert lib.assertMsg (lib.hasInfix cdnPrefix urls)
+                      "import-cargo-lock overlay drift: crate not on the CDN (${urls})";
+                    assert lib.assertMsg (!lib.hasInfix apiPrefix urls)
+                      "import-cargo-lock overlay drift: API URL survives (${urls})";
+                    drv;
+                });
+
+              # Never a supported system, so buildPackages cannot collapse into
+              # the package set and leave the placement check vacuous.
+              cross = pkgs.pkgsCross.riscv64;
+            in
+            assert lib.assertMsg ((probe lockArgs).outPath == (reference pkgs).outPath)
+              "import-cargo-lock overlay drift: the rewrite moves the vendor dir, not just the URL";
+            assert lib.assertMsg (((overlaid cross) lockArgs).outPath == (reference cross).outPath)
+              "import-cargo-lock overlay drift: importCargoLock is not instantiated on the build platform";
+            pkgs.runCommand "import-cargo-lock-overlay-eval-gate" { } "touch $out";
         });
 
       devShells = forAllSystems ({ pkgs, ... }: {

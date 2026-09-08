@@ -13,6 +13,7 @@ Previously, [`logos-cpp-sdk`](https://github.com/logos-co/logos-cpp-sdk) served 
 | `lib.forAllSystems` | Helper to generate outputs for all supported systems |
 | `lib.supportedSystems` | `aarch64-darwin`, `x86_64-darwin`, `aarch64-linux`, `x86_64-linux` |
 | `lib.overlays.fetchCargoVendorUserAgent` | Makes `rustPlatform.fetchCargoVendor` send a User-Agent on the current pin (crates.io 403s python-requests' default). Applied by `forAllSystems`/`forAllTargets`/`legacyPackages`; a consumer that does its own `import nixpkgs` must add it to `overlays` itself. See `nix/overlays/fetch-cargo-vendor-user-agent.nix`. |
+| `lib.overlays.importCargoLockStaticCratesIo` | Points `rustPlatform.importCargoLock` at `static.crates.io` on the current pin (crates.io's `/api/v1/crates` 403s the `curl/...` User-Agent `fetchurl` sends). This is the fetcher a `cargoLock` build uses; `cargoHash` builds use `fetchCargoVendor` above, so a repo that builds Rust needs whichever matches its packages, or both. Applied by `forAllSystems`/`forAllTargets`/`legacyPackages`; a consumer that does its own `import nixpkgs` must add it to `overlays` itself. See `nix/overlays/import-cargo-lock-static-crates-io.nix`. |
 
 ## Usage
 
