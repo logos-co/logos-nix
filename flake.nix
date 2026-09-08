@@ -148,6 +148,7 @@
           forAllSystems
           forAllTargets
           mkWindowsPkgs
+          nativeOverlays
           windowsBuildSystems
           windowsCrossSystem
           ;
@@ -268,6 +269,23 @@
           # that stops matching still evaluates, and so does an importCargoLock
           # instantiated on the host platform, whose git-crate script then runs
           # target cargo/jq on the builder.
+          # `lib.overlays` is the menu, `lib.nativeOverlays` the list consumers
+          # apply wholesale. An overlay added to one and not the other ships
+          # unwired -- which is exactly how the importCargoLock fix reached
+          # master applying to nothing.
+          overlay-exports =
+            let
+              windowsNames = [ "windows" "windowsNative" ];
+              nativeNames = builtins.attrNames (removeAttrs self.lib.overlays windowsNames);
+            in
+            assert lib.assertMsg
+              (builtins.length self.lib.nativeOverlays == builtins.length nativeNames)
+              ("overlay export drift: lib.nativeOverlays has "
+                + toString (builtins.length self.lib.nativeOverlays)
+                + " entries but lib.overlays lists " + toString (builtins.length nativeNames)
+                + " non-Windows overlays (" + toString nativeNames + ")");
+            pkgs.runCommand "overlay-exports-eval-gate" { } "touch $out";
+
           import-cargo-lock-overlay =
             let
               apiPrefix = "https://crates.io/api/v1/crates";

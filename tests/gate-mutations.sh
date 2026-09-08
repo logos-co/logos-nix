@@ -96,10 +96,17 @@ mutate "$DIR/$OVERLAY" 'cdnPrefix = "https://static.crates.io/crates";' \
 expect_fail "M3 rewrite targets the wrong host" \
   "crate not on the CDN (https://mirror.invalid/crates/"
 
-# M4 -- overlay dropped from nativeOverlays, so nothing is rewritten at all.
+# M4 -- dropped from nativeOverlays but still listed in lib.overlays: the
+# bookkeeping gate names the mistake before any crate URL is looked at.
 prepare m4
 drop_list_entry "$DIR/flake.nix" importCargoLockStaticCratesIoOverlay
-expect_fail "M4 overlay not applied" \
+expect_fail "M4 exported but not applied" "overlay export drift"
+
+# M6 -- dropped from both, so the overlay is simply gone and nothing rewrites.
+prepare m6
+drop_list_entry "$DIR/flake.nix" importCargoLockStaticCratesIoOverlay
+mutate "$DIR/flake.nix" "importCargoLockStaticCratesIo = importCargoLockStaticCratesIoOverlay;" ""
+expect_fail "M6 overlay not applied" \
   "crate not on the CDN (https://crates.io/api/v1/crates/"
 
 # M5 -- the rewrite matches nothing. Caught by the OVERLAY's own assert, which
