@@ -117,6 +117,15 @@ mutate "$DIR/$OVERLAY" 'apiPrefix = "https://crates.io/api/v1/crates";' \
   '  apiPrefix = "https://crates.invalid/nowhere";'
 expect_fail "M5 rewrite matches nothing" "references neither"
 
+# M7 -- the fetchCrate rewrite lands somewhere that is not the CDN. Its own
+# overlay, its own gate; the exports gate covers forgetting to register it.
+prepare m7
+mutate "$DIR/nix/overlays/fetch-crate-static-crates-io.nix" \
+  'cdnPrefix = "https://static.crates.io/crates";' \
+  '  cdnPrefix = "https://mirror.invalid/crates";'
+expect_fail "M7 fetchCrate targets the wrong host" \
+  "crate source not on the CDN (https://mirror.invalid/crates/"
+
 prepare clean
 expect_pass "clean tree passes"
 

@@ -77,9 +77,11 @@
       # upstream fix.
       fetchCargoVendorUserAgentOverlay = import ./nix/overlays/fetch-cargo-vendor-user-agent.nix;
       importCargoLockStaticCratesIoOverlay = import ./nix/overlays/import-cargo-lock-static-crates-io.nix;
+      fetchCrateStaticCratesIoOverlay = import ./nix/overlays/fetch-crate-static-crates-io.nix;
       nativeOverlays = [
         fetchCargoVendorUserAgentOverlay
         importCargoLockStaticCratesIoOverlay
+        fetchCrateStaticCratesIoOverlay
       ];
       mkNativePkgs = system: import nixpkgs { inherit system; overlays = nativeOverlays; };
 
@@ -158,6 +160,7 @@
           windowsNative = windowsNativeOverlay;
           fetchCargoVendorUserAgent = fetchCargoVendorUserAgentOverlay;
           importCargoLockStaticCratesIo = importCargoLockStaticCratesIoOverlay;
+          fetchCrateStaticCratesIo = fetchCrateStaticCratesIoOverlay;
         };
       };
 
@@ -263,6 +266,24 @@
         {
           windows-overlay = assert gate;
             pkgs.runCommand "windows-overlay-eval-gate" { } "touch $out";
+
+          # Same for fetchCrate, whose default `registryDl` the overlay swaps.
+          # unpack=false so the probe is a plain fetchurl and exposes `urls`.
+          fetch-crate-overlay =
+            let
+              probe = pkgs.fetchCrate {
+                crateName = "logos-gate-probe";
+                version = "0.0.0";
+                unpack = false;
+                sha256 = lib.fakeSha256;
+              };
+              urls = toString (probe.urls or probe.url);
+            in
+            assert lib.assertMsg (lib.hasInfix "https://static.crates.io/crates" urls)
+              "fetch-crate overlay drift: crate source not on the CDN (${urls})";
+            assert lib.assertMsg (!lib.hasInfix "https://crates.io/api/v1/crates" urls)
+              "fetch-crate overlay drift: API URL survives (${urls})";
+            pkgs.runCommand "fetch-crate-overlay-eval-gate" { } "touch $out";
 
           # Drift guard for the importCargoLock rewrite (the UA overlay asserts
           # on its own hunks). Both failure modes here are silent: a rewrite
