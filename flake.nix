@@ -69,6 +69,7 @@
 
       windowsCrossOverlay = import ./nix/windows/cross-overlay.nix;
       windowsNativeOverlay = import ./nix/windows/native-overlay.nix;
+      windowsNimOverlay = import ./nix/windows/nim-overlay.nix;
 
       # iOS targets. Same cross pin as Windows (Qt 6.11.1); the Xcode version
       # and build are part of every iOS derivation's hash via
@@ -230,7 +231,8 @@
         }: import nixpkgs-windows {
           localSystem = buildSystem;
           crossSystem = windowsCrossSystem // { inherit libc; };
-          overlays = nixpkgs.lib.optional (needsNativeOverlay buildSystem) windowsNativeOverlay;
+          overlays = [ windowsNimOverlay ]
+            ++ nixpkgs.lib.optional (needsNativeOverlay buildSystem) windowsNativeOverlay;
           crossOverlays = [ windowsCrossOverlay ]; # HOST-side fixes
         };
 
@@ -295,6 +297,7 @@
         overlays = {
           windows = windowsCrossOverlay;
           windowsNative = windowsNativeOverlay;
+          windowsNim = windowsNimOverlay;
           ios = iosCrossOverlay;
           fetchCargoVendorUserAgent = fetchCargoVendorUserAgentOverlay;
           importCargoLockStaticCratesIo = importCargoLockStaticCratesIoOverlay;
@@ -408,6 +411,18 @@
             # cli11 is a direct logosctl dependency and is platforms.unix
             # upstream.
             { name = "cli11 available for Windows"; ok = builtins.isString w.cli11.drvPath; }
+            # nimbus-eth1 needs 2.2.10 (nix/windows/nim-overlay.nix), and needs it
+            # as the mingw WRAPPER: a bare native nim knows nothing about the
+            # target, so the version alone would pass against a compiler that
+            # cannot emit a PE.
+            {
+              name = "windows nim is the mingw wrapper";
+              ok = lib.hasPrefix "x86_64-w64-mingw32-nim-wrapper-" w.buildPackages.nim-2_2.name;
+            }
+            {
+              name = "windows nim is at least 2.2.10";
+              ok = lib.versionAtLeast w.buildPackages.nim-2_2.version "2.2.10";
+            }
           ];
 
           gate = lib.foldl'
@@ -448,7 +463,7 @@
           # master applying to nothing.
           overlay-exports =
             let
-              crossNames = [ "windows" "windowsNative" "ios" ];
+              crossNames = [ "windows" "windowsNative" "windowsNim" "ios" ];
               nativeNames = builtins.attrNames (removeAttrs self.lib.overlays crossNames);
             in
             assert lib.assertMsg

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Mutation test for checks.<system>.import-cargo-lock-overlay.
+# Mutation test for the eval-time drift gates: the import-cargo-lock /
+# fetchCrate overlays (M*) and the Windows Nim overlay (N*).
 #
 # A drift gate that has quietly stopped discriminating is the same silent
 # failure it was written to catch. Each case below replays a real defect and
@@ -12,6 +13,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/gate-mutations.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
 OVERLAY=nix/overlays/import-cargo-lock-static-crates-io.nix
+NIM_OVERLAY=nix/windows/nim-overlay.nix
 failures=0
 DIR=
 
@@ -125,6 +127,31 @@ mutate "$DIR/nix/overlays/fetch-crate-static-crates-io.nix" \
   '  cdnPrefix = "https://mirror.invalid/crates";'
 expect_fail "M7 fetchCrate targets the wrong host" \
   "crate source not on the CDN (https://mirror.invalid/crates/"
+
+# N1 -- the overlay exported but never applied, which is what a consumer sees
+# today: `nim-2_2` is then the pin's 2.2.4 and nimbus stops in the beacon chain.
+prepare n1
+mutate "$DIR/flake.nix" "overlays = [ windowsNimOverlay ]" "          overlays = [ ]"
+expect_fail "N1 nim overlay not applied" "windows nim is at least 2.2.10"
+
+# N2 -- the pin catches up and the override silently becomes a DOWNGRADE.
+prepare n2
+mutate "$DIR/$NIM_OVERLAY" 'version = "2.2.10";' '  version = "2.2.4";'
+expect_fail "N2 pin caught up" "nim overlay is stale"
+
+# N3 -- the patch swap stops matching, so 2.2.4's mangling patch is handed to a
+# tree that no longer takes it. A build-time failure hours later, otherwise.
+prepare n3
+mutate "$DIR/$NIM_OVERLAY" 'oldMangling = "extra-mangling-2.patch";' \
+  '  oldMangling = "extra-mangling-9.patch";'
+expect_fail "N3 patch filter matches nothing" "is not in nim-unwrapped-2_2.patches"
+
+# N4 -- same for the koch flags 2.2.10 dropped; leaving them on fails in
+# excpt.nim, several minutes into booting the compiler.
+prepare n4
+mutate "$DIR/$NIM_OVERLAY" 'droppedKoch = [ "-d:nativeStacktrace" "-d:useGnuReadline" ];' \
+  '  droppedKoch = [ "-d:neither" ];'
+expect_fail "N4 koch filter matches nothing" "kochArgs carries none of"
 
 prepare clean
 expect_pass "clean tree passes"
