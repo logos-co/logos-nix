@@ -110,6 +110,50 @@ in
       configureFlags = (old.configureFlags or [ ]) ++ [ "--disable-https" "--disable-curl" ];
     }));
 
+  # libwebsockets needs three unrelated things to cross, and each one is
+  # invisible until the one above it is fixed.
+  #
+  # 1. libuv, which nixpkgs pulls in only to satisfy LWS_WITH_PLUGINS, does not
+  #    compile under mingw gcc 15 -- -Wincompatible-pointer-types is an error
+  #    there (src/win/util.c:630, arg 3 of uv__convert_utf16_to_utf8). lws
+  #    plugins are its own dynamically-loaded protocol handlers and need an
+  #    external event loop; a consumer driving lws_service() itself uses none of
+  #    it, which is exactly json_rpc_bridge's shape. Flip the flag and the
+  #    filter together -- with libuv still in buildInputs CMake re-enables
+  #    LWS_WITH_LIBUV by detection.
+  #
+  # 2. lib/tls/CMakeLists.txt appends `pthread` to CMAKE_REQUIRED_LIBRARIES for
+  #    every OpenSSL feature check unless pkg-config found OpenSSL -- and here
+  #    find_package did, so PC_OPENSSL_FOUND is false and -lpthread goes on. It
+  #    does not resolve against mcfgthread, so EVERY check link-fails and lws
+  #    concludes it is looking at a pre-1.1 OpenSSL: HMAC_CTX becomes a concrete
+  #    field and lws-genhash.h:93 fails with "field 'ctx' has incomplete type".
+  #    Note the failure is a COMPILE error in lws's own sources, nowhere near
+  #    the configure lines that caused it. Sixth instance of this mcfgthread
+  #    hole (libpq, Rust windows-gnu std, lsquic, nim-boringssl, abseil, here).
+  #
+  # 3. `if(WIN32 AND NOT CYGWIN)` installs the CMake package files to $out/cmake
+  #    instead of $out/lib/cmake/libwebsockets, and nixpkgs' postInstall
+  #    substitutes that Unix path literally, so the install phase dies on a file
+  #    that was never written. Pin the layout rather than patch postInstall --
+  #    consumers' find_package looks in the Unix place too.
+  libwebsockets = prev.libwebsockets.overrideAttrs (old: {
+    buildInputs = builtins.filter
+      (d: !(lib.isDerivation d && (d.pname or "") == "libuv"))
+      (old.buildInputs or [ ])
+    ++ [ final.windows.pthreads ];
+    # nixpkgs passes -DLWS_WITH_PLUGINS=ON, so drop it rather than append past
+    # it: appending works only by CMake's last-wins rule, which reads as an
+    # accident and would silently invert if the order ever changed.
+    cmakeFlags = builtins.filter
+      (f: !(lib.hasPrefix "-DLWS_WITH_PLUGINS" f))
+      (old.cmakeFlags or [ ])
+    ++ [
+      (lib.cmakeBool "LWS_WITH_PLUGINS" false)
+      (lib.cmakeFeature "LWS_INSTALL_CMAKE_DIR" "lib/cmake/libwebsockets")
+    ];
+  });
+
   # libpq is reachable for a Windows host, but only after four unrelated
   # obstacles -- and every Logos repo that talks to postgres needs it, so it is
   # fixed here rather than in each consumer.
