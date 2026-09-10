@@ -344,11 +344,13 @@
           hasFlagPrefix = drv: prefix:
             builtins.any (f: lib.hasPrefix prefix f) (drv.cmakeFlags or [ ]);
 
-          qtbaseInputNames =
+          inputNames = drv:
             map (p: p.pname or p.name or "")
               (builtins.filter lib.isDerivation
-                ((w.qt6.qtbase.buildInputs or [ ])
-                  ++ (w.qt6.qtbase.propagatedBuildInputs or [ ])));
+                ((drv.buildInputs or [ ])
+                  ++ (drv.propagatedBuildInputs or [ ])));
+
+          qtbaseInputNames = inputNames w.qt6.qtbase;
 
           excludes = n: !(builtins.any (x: lib.hasPrefix n x) qtbaseInputNames);
 
@@ -411,6 +413,21 @@
             # cli11 is a direct logosctl dependency and is platforms.unix
             # upstream.
             { name = "cli11 available for Windows"; ok = builtins.isString w.cli11.drvPath; }
+            # libmicrohttpd is only reachable with its optional closure filtered
+            # out -- gnutls drags unbound -> libevent, which has no mingw build.
+            # Assert on what the filter must have REMOVED, not just that the
+            # package resolves: a filter that matches nothing still evaluates,
+            # and the eval failure it lets through is hours away in a consumer.
+            {
+              name = "libmicrohttpd available for Windows";
+              ok = builtins.isString w.libmicrohttpd.drvPath;
+            }
+            {
+              name = "libmicrohttpd drops gnutls, curl and libgcrypt";
+              ok = builtins.all
+                (n: !(builtins.elem n (inputNames w.libmicrohttpd)))
+                [ "gnutls" "curl" "libgcrypt" ];
+            }
             # nimbus-eth1 needs 2.2.10 (nix/windows/nim-overlay.nix), and needs it
             # as the mingw WRAPPER: a bare native nim knows nothing about the
             # target, so the version alone would pass against a compiler that

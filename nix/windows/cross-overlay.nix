@@ -87,6 +87,29 @@ in
   # covered by logos-co/nixpkgs@mingw-integration.
   cli11 = widenPlatforms prev.cli11;
 
+  # libmicrohttpd is `platforms.unix` upstream, but the library itself has real
+  # Windows support -- the mingw build picks up Winsock (`Libs.private:
+  # -lws2_32`) and installs libmicrohttpd-12.dll. What does not cross is its
+  # OPTIONAL closure: gnutls pulls unbound -> libevent, and libevent's mingw
+  # build dies formatting an int64 (`%I64lld`).
+  #
+  # Both of the things dropped here are optional to an EMBEDDED server, which is
+  # the only way Logos uses it: curl is the test suite's client and `doCheck` is
+  # already false, and HTTPS on a module's own loopback JSON-RPC endpoint is not
+  # what terminates TLS. Flip both together with the buildInputs filter if a
+  # module ever needs https -- the flag alone would leave configure to
+  # auto-detect a gnutls that is not there.
+  libmicrohttpd =
+    let
+      optionalDeps = [ "gnutls" "curl" "libgcrypt" ];
+    in
+    widenPlatforms (prev.libmicrohttpd.overrideAttrs (old: {
+      buildInputs = builtins.filter
+        (d: !(lib.isDerivation d && builtins.elem (d.pname or "") optionalDeps))
+        (old.buildInputs or [ ]);
+      configureFlags = (old.configureFlags or [ ]) ++ [ "--disable-https" "--disable-curl" ];
+    }));
+
   # libpq is reachable for a Windows host, but only after four unrelated
   # obstacles -- and every Logos repo that talks to postgres needs it, so it is
   # fixed here rather than in each consumer.
