@@ -428,6 +428,18 @@
                 (n: !(builtins.elem n (inputNames w.libmicrohttpd)))
                 [ "gnutls" "curl" "libgcrypt" ];
             }
+            # libwebsockets only crosses with libuv out of the picture, and
+            # the flag alone is not enough -- CMake re-detects libuv from
+            # buildInputs. Assert both halves for the same reason as above.
+            {
+              name = "libwebsockets drops libuv";
+              ok = !(builtins.elem "libuv" (inputNames w.libwebsockets));
+            }
+            {
+              name = "libwebsockets disables lws plugins";
+              ok = hasFlagPrefix w.libwebsockets "-DLWS_WITH_PLUGINS:BOOL=FALSE"
+                && !(hasFlagPrefix w.libwebsockets "-DLWS_WITH_PLUGINS=ON");
+            }
             # nimbus-eth1 needs 2.2.10 (nix/windows/nim-overlay.nix), and needs it
             # as the mingw WRAPPER: a bare native nim knows nothing about the
             # target, so the version alone would pass against a compiler that
