@@ -2,45 +2,12 @@
   description = "Logos Nix — shared Nix infrastructure for all Logos projects";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # WINDOWS TARGET ONLY. Deliberately a second, newer nixpkgs — the one
-    # exception to this repo's "never add a separate nixpkgs pin" rule, scoped
-    # so it can never reach a Linux or macOS build.
-    #
-    # Why: this pin exists for upstream's mingw cross fixes, which our native
-    # pin predates — notably the libjpeg-turbo mingw-boolean.patch repair that
-    # landed 2026-01-09. Without it the overlay has to carry that patch itself.
-    #
-    # IT IS *NOT* HERE TO FIX W1 (plugin DLL search), whatever an earlier
-    # revision of this comment claimed. Qt loads plugins with a bare
-    # LoadLibrary, so a module in its own directory cannot resolve a vendored
-    # DLL sitting beside it. That was measured on real Windows against Nix-built
-    # 6.9.2, and the belief that 6.11.1 fixed it came from an MSYS2 build — the
-    # exact proxy this repo's own Stage 0b lesson says never to trust for
-    # Qt-internals questions. Re-measured 2026-08-06 on real Windows against
-    # THIS pin's Nix-built Qt 6.11.1 (QT_RUNTIME=6.11.1, verified off
-    # Qt6Core.dll's version resource), module dir isolated:
-    #     plain                          -> LOAD=FAILURE "The specified module
-    #                                       could not be found."
-    #     LOAD_WITH_ALTERED_SEARCH_PATH  -> LOAD=SUCCESS, vendored DLL resolved
-    #                                       from the module's own directory
-    #     vendored DLL moved next to exe -> LOAD=SUCCESS  (control)
-    # So W1 is real at 6.11.1 and is fixed in code, in logos-module's
-    # LogosModule::loadFromPath (see src/win_dll_search.cpp), not by this pin.
-    #
-    # Cost: Windows ships Qt 6.11.1 while Linux/macOS stay on 6.9.2, and
-    # logos-cpp-sdk notes "the QRO wire is Qt-version-sensitive". Every process
-    # in a Logos node talks over same-machine local sockets / named pipes, so a
-    # Windows install is internally consistent; there is no cross-platform QtRO
-    # link today. Revisit if one is ever introduced.
-    #
-    # Pinned to the exact base that logos-co/nixpkgs@mingw-integration was
-    # rebased onto, so that branch stays a byte-for-byte reference.
-    nixpkgs-windows.url = "github:NixOS/nixpkgs/b5aa0fbd538984f6e3d201be0005b4463d8b09f8";
+    # One pin for all targets; includes the fetchCargoVendor UA fix.
+    # https://github.com/NixOS/nixpkgs/pull/512735
+    nixpkgs.url = "github:NixOS/nixpkgs/b5aa0fbd538984f6e3d201be0005b4463d8b09f8";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-windows }:
+  outputs = { self, nixpkgs }:
     let
       supportedSystems = [
         "aarch64-darwin"
@@ -210,10 +177,6 @@
 
       # Package set targeting Windows, built FROM `buildSystem`.
       #
-      # Uses `nixpkgs-windows` (Qt 6.11.1), NOT the workspace pin — see the
-      # input comment for why. Nothing else in this flake touches it, so the
-      # native Linux/macOS closures are unaffected by Windows support existing.
-      #
       # The BUILD-side overlay is only needed where wine is unavailable (see
       # native-overlay.nix). Applying it unconditionally would be actively
       # harmful: it changes the NATIVE glib's hash, which invalidates the
@@ -228,7 +191,7 @@
       mkWindowsPkgs =
         { buildSystem
         , libc ? windowsCrossSystem.libc
-        }: import nixpkgs-windows {
+        }: import nixpkgs {
           localSystem = buildSystem;
           crossSystem = windowsCrossSystem // { inherit libc; };
           overlays = [ windowsNimOverlay ]
