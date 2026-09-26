@@ -5,6 +5,8 @@
 # Every file under lib/<abi>/ must be named lib*.so: the package manager
 # extracts nothing else. Executables the app spawns go in the same way
 # (lib<name>.so), and the manifest sets extractNativeLibs so they exist on disk.
+# native-libs.py follows every DT_NEEDED Android does not provide and renames
+# versioned sonames (libssl.so.3 -> libssl.so) in place.
 {
   lib,
   runCommand,
@@ -20,9 +22,19 @@
   # The NativeActivity's library, without "lib" and ".so".
   libName,
   label ? pname,
-  # A directory whose *.so files become lib/<abi>/; a list of such directories
-  # is merged in order.
-  libDirs,
+  # Directories whose *.so files ship, in order; their dependencies follow.
+  libDirs ? [ ],
+  # More ELF files: libraries by path, libraries under a given APK file name
+  # (e.g. { "libfoo_plugin.so" = ".../foo_plugin.so"; }), and executables,
+  # shipped as lib<name>.so.
+  libraries ? [ ],
+  librariesAs ? { },
+  executables ? { },
+  # Where the DT_NEEDED of all of the above resolve, after their own RUNPATHs
+  # (the NDK's libc++_shared.so is always searched).
+  searchPath ? [ ],
+  # A directory packaged as the APK's assets/.
+  assets ? null,
   permissions ? [ "android.permission.INTERNET" ],
   minSdk ? androidPkgs.apiLevel,
   targetSdk ? androidPkgs.compileSdkVersion,
@@ -61,19 +73,26 @@ let
 in
 runCommand "${pname}-${version}.apk"
   {
-    nativeBuildInputs = [ buildPackages.zip buildPackages.unzip buildPackages.jdk buildPackages.file ];
+    nativeBuildInputs = [ buildPackages.zip buildPackages.unzip buildPackages.jdk buildPackages.file
+                          buildPackages.python3 buildPackages.nukeReferences ];
     passthru = { inherit packageName libName abi; apkName = "${pname}-${version}.apk"; };
   }
   ''
     work=$(mktemp -d)
-    mkdir -p "$work/apk/lib/${abi}"
-    for dir in ${lib.escapeShellArgs (map toString (lib.toList libDirs))}; do
-      for so in "$dir"/*.so; do
-        cp -L "$so" "$work/apk/lib/${abi}/"
-      done
-    done
-    chmod -R u+w "$work/apk"
     libs="$work/apk/lib/${abi}"
+    args=()
+    for dir in ${lib.escapeShellArgs (map toString (lib.toList libDirs))}; do
+      for so in "$dir"/*.so; do args+=(--lib "$so"); done
+    done
+    python3 ${./native-libs.py} "$libs" --stubs ${androidPkgs.ndkStubLibDir} \
+      --search ${androidPkgs.ndkSysroot}/usr/lib/${androidPkgs.ndkTriple} \
+      ${lib.concatMapStringsSep " " (d: "--search ${d}") searchPath} \
+      ${lib.concatMapStringsSep " " (l: "--lib ${l}") libraries} \
+      ${lib.concatStringsSep " " (lib.mapAttrsToList (n: p: "--lib-as ${n}=${p}") librariesAs)} \
+      ${lib.concatStringsSep " " (lib.mapAttrsToList (n: p: "--exe ${n}=${p}") executables)} \
+      "''${args[@]}"
+    # Build paths baked into strings (OpenSSL's OPENSSLDIR and the like).
+    nuke-refs "$libs"/*.so
     [ -e "$libs/lib${libName}.so" ] || { echo "no lib${libName}.so among the libraries" >&2; exit 1; }
 
     # Gate: every DT_NEEDED is packaged or is a library Android provides at minSdk.
@@ -90,10 +109,12 @@ runCommand "${pname}-${version}.apk"
       exit 1
     fi
     # Gate: nothing points back into the build machine's store.
-    if grep -l '/nix/store/' "$libs"/*.so; then
-      echo "the libraries above still reference /nix/store (RUNPATH or strings)" >&2
-      exit 1
-    fi
+    for so in "$libs"/*.so; do
+      if grep -a -o '/nix/store/[0-9a-z]\{32\}' "$so" | grep -qv '/nix/store/e\{32\}'; then
+        echo "$(basename "$so") still references /nix/store" >&2
+        exit 1
+      fi
+    done
     # Gate: 16 KB pages (Android 15+ devices may use them).
     for so in "$libs"/*.so; do
       if $readelf -lW "$so" | awk '$1 == "LOAD" && strtonum($NF) < 16384 { bad = 1 } END { exit !bad }'; then
@@ -103,7 +124,8 @@ runCommand "${pname}-${version}.apk"
     done
 
     ${buildTools}/aapt2 link -o "$work/base.apk" -I ${androidJar} --manifest ${manifest} \
-      --min-sdk-version ${toString minSdk} --target-sdk-version ${toString targetSdk}
+      --min-sdk-version ${toString minSdk} --target-sdk-version ${toString targetSdk} \
+      ${lib.optionalString (assets != null) "-A ${assets}"}
     (cd "$work/apk" && zip -q -r "$work/base.apk" lib)
     ${buildTools}/zipalign -P 16 -f 4 "$work/base.apk" "$work/aligned.apk"
     export HOME=$work
