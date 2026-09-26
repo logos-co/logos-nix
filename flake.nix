@@ -107,13 +107,11 @@
       # every Qt library are per-ABI.
       androidAbi = "arm64-v8a";
 
-      # Qt 6.11 defaults to and requires API 28 (QtAutoDetectHelpers.cmake picks
-      # android-28 when nothing else asks). The same number is `androidSdkVersion`
-      # on the cross system, which nixpkgs bakes into
-      # `--target=aarch64-linux-android<N>` for every target dependency -- Qt and
-      # its deps have to agree on it or the app links against symbols its own
-      # minSdk does not promise.
-      androidApiLevel = "28";
+      # The runtime floor, baked into `--target=aarch64-linux-android<N>` for every
+      # target dependency, so everything in the set agrees on it. Qt 6.11 needs 28;
+      # the Qt-free Logos runtime needs 34: the platform ICU C API (31), pidfd (31),
+      # backtrace() (33) and POSIX_SPAWN_CLOEXEC_DEFAULT, measured on 34.
+      androidApiLevel = "34";
 
       # Compile-time SDK: the android.jar the Java side and androiddeployqt use.
       # Independent of androidApiLevel, which is the runtime floor. 36 / 36.0.0
@@ -176,6 +174,13 @@
       # that wrap forAllTargets map build systems for Windows only, and
       # `stdenv.isDarwin` is true for an iOS host, so adding these keys to
       # forAllTargets would misroute them. Android adds its keys here.
+      # The build platform's package set with the Android SDK licence accepted,
+      # for what an app composes around its APK (an emulator, platform tools).
+      androidBuildPkgs = buildSystem: import nixpkgs-windows {
+        system = buildSystem;
+        config = androidConfig;
+      };
+
       mobileTargets = {
         aarch64-ios-simulator = {
           buildSystem = "aarch64-darwin";
@@ -286,6 +291,7 @@
           # A function of the build system, not a plain overlay: it closes over
           # the build-platform SDK/NDK, so there is no one correct instance.
           mkAndroidCrossOverlay
+          androidBuildPkgs
           androidBuildSystems
           androidCrossSystem
           androidAbi

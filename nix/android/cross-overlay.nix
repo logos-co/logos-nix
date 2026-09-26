@@ -195,6 +195,9 @@ lib.optionalAttrs isCross {
   # Qt CMake project -> debug-signed APK for this set's ABI; see mk-apk.nix.
   mkQtAndroidApk = final.callPackage ./mk-apk.nix { };
 
+  # Native libraries -> a Java-free NativeActivity APK; see mk-native-apk.nix.
+  mkNativeActivityApk = final.callPackage ./mk-native-apk.nix { };
+
   # `enableKTLS ? hostPlatform.isLinux` is true for Android, and bionic has none
   # of the kernel-TLS socket plumbing openssl's internal/ktls.h assumes
   # (SOL_TCP, struct msghdr, CMSG_*). Qt only needs libssl/libcrypto.
