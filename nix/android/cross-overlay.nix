@@ -26,7 +26,8 @@ let
   # Both read from `prev`, not `final`: the guard below decides which attribute
   # NAMES this overlay contributes, and in a nixpkgs overlay the set of names
   # may not depend on `final` -- the fixpoint cannot be constructed at all.
-  # Neither lib nor stdenv is overridden here, so the two agree.
+  # lib is not overridden here, and stdenv only in its linker flags, so the
+  # two agree.
   lib = prev.lib;
   isCross = !prev.stdenv.buildPlatform.canExecute prev.stdenv.hostPlatform;
 
@@ -197,6 +198,15 @@ lib.optionalAttrs isCross {
 
   # Native libraries -> a Java-free NativeActivity APK; see mk-native-apk.nix.
   mkNativeActivityApk = final.callPackage ./mk-native-apk.nix { };
+
+  # 16 KB pages: Android 15+ devices may use them, and NDK 27 still links 4 KB
+  # LOAD segments by default (r28 flips it). Every link in this set asks for 16 KB,
+  # the way the NDK wrapper already passes its other -z flags.
+  stdenv = prev.overrideCC prev.stdenv (prev.stdenv.cc.override (old: {
+    extraBuildCommands = (old.extraBuildCommands or "") + ''
+      echo "-z,max-page-size=16384" >> $out/nix-support/cc-ldflags
+    '';
+  }));
 
   # `enableKTLS ? hostPlatform.isLinux` is true for Android, and bionic has none
   # of the kernel-TLS socket plumbing openssl's internal/ktls.h assumes
