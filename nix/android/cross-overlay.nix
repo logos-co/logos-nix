@@ -213,6 +213,19 @@ lib.optionalAttrs isCross {
       ++ [ "--enable-jit=no" ];
   });
 
+  # spdlog's own tests link Catch2, which wants Android's liblog; the library
+  # itself does not.
+  spdlog = prev.spdlog.overrideAttrs (old: {
+    cmakeFlags =
+      (builtins.filter (f: !(lib.hasInfix "SPDLOG_BUILD_TESTS" f)) (old.cmakeFlags or [ ]))
+      ++ [ "-DSPDLOG_BUILD_TESTS=OFF" ];
+    doCheck = false;
+  });
+
+  # onetbb drags in hwloc -> pciutils, kmod and ncurses, none of which build
+  # against bionic; BLAKE3 only uses it to hash in parallel.
+  libblake3 = prev.libblake3.override { useTBB = false; };
+
   # Identical to the Windows overlay's fix and for the same reason: sqlite uses
   # `hostPlatform.isStatic` as a proxy for "tcl is unavailable", which does not
   # generalise to cross targets. For Android the failure is one step further
