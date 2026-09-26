@@ -40,6 +40,9 @@
   targetSdk ? androidPkgs.compileSdkVersion,
   # Extra <intent-filter> XML for the activity (e.g. a URI scheme).
   intentFilters ? "",
+  # E.g. "singleTask": android_main runs once per process, so a second
+  # instance must not start.
+  launchMode ? null,
   versionCode ? 1,
 }:
 
@@ -57,7 +60,7 @@ let
     ${lib.concatMapStrings (p: "  <uses-permission android:name=\"${p}\"/>\n") permissions}
       <application android:label="${label}" android:hasCode="false"
           android:extractNativeLibs="true" android:debuggable="true">
-        <activity android:name="android.app.NativeActivity" android:exported="true"
+        <activity android:name="android.app.NativeActivity" android:exported="true"${lib.optionalString (launchMode != null) " android:launchMode=\"${launchMode}\""}
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode"
             android:windowSoftInputMode="adjustResize">
           <meta-data android:name="android.app.lib_name" android:value="${libName}"/>
