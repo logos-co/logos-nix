@@ -222,6 +222,27 @@ lib.optionalAttrs isCross {
     doCheck = false;
   });
 
+  # b2 has no bionic target: it builds for "linux", which links -lrt and
+  # -lpthread, and bionic keeps both in libc. Empty archives answer that.
+  # Libraries the Logos runtime does not link are skipped; the headers all install.
+  boost =
+    let
+      emptyRt = final.runCommandCC "empty-librt-libpthread" { } ''
+        mkdir -p $out/lib
+        $AR rcs $out/lib/librt.a
+        $AR rcs $out/lib/libpthread.a
+      '';
+    in
+    prev.boost.override {
+      # (--with-* would clash with the recipe's own --without-python.)
+      extraB2Args = [ "linkflags=-L${emptyRt}/lib" ]
+        ++ map (l: "--without-${l}") [
+          "graph" "graph_parallel" "mpi" "stacktrace" "test" "wave" "locale" "log" "iostreams"
+          "fiber" "cobalt" "coroutine" "contract" "program_options" "serialization"
+          "type_erasure" "timer" "json" "url" "regex" "random" "math" "nowide" "charconv"
+        ];
+    };
+
   # onetbb drags in hwloc -> pciutils, kmod and ncurses, none of which build
   # against bionic; BLAKE3 only uses it to hash in parallel.
   libblake3 = prev.libblake3.override { useTBB = false; };
