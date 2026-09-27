@@ -135,8 +135,12 @@ runCommand "${pname}-${version}.apk"
       --min-sdk-version ${toString minSdk} --target-sdk-version ${toString targetSdk} \
       ${lib.optionalString (assets != null) "-A ${assets}"}
     ${lib.optionalString (javaSources != [ ]) ''
-      mkdir -p "$work/classes" "$work/dex"
-      javac -source 8 -target 8 -nowarn -Xlint:-options -cp ${androidJar} -d "$work/classes" ${lib.escapeShellArgs (map toString javaSources)}
+      mkdir -p "$work/java" "$work/classes" "$work/dex"
+      # javac wants each public class in a file of its own name, not <hash>-Name.java.
+      for f in ${lib.escapeShellArgs (map (p: "${p}") javaSources)}; do
+        cp "$f" "$work/java/$(basename "$f" | cut -d- -f2-)"
+      done
+      javac -source 8 -target 8 -nowarn -Xlint:-options -cp ${androidJar} -d "$work/classes" "$work"/java/*.java
       ${buildTools}/d8 --min-api ${toString minSdk} --lib ${androidJar} --output "$work/dex" $(find "$work/classes" -name '*.class')
       cp "$work/dex/classes.dex" "$work/apk/"
     ''}
