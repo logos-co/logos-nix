@@ -26,7 +26,8 @@ let
   # Both read from `prev`, not `final`: the guard below decides which attribute
   # NAMES this overlay contributes, and in a nixpkgs overlay the set of names
   # may not depend on `final` -- the fixpoint cannot be constructed at all.
-  # Neither lib nor stdenv is overridden here, so the two agree.
+  # lib is not overridden here, and stdenv only in its linker flags, so the
+  # two agree.
   lib = prev.lib;
   isCross = !prev.stdenv.buildPlatform.canExecute prev.stdenv.hostPlatform;
 
@@ -195,6 +196,18 @@ lib.optionalAttrs isCross {
   # Qt CMake project -> debug-signed APK for this set's ABI; see mk-apk.nix.
   mkQtAndroidApk = final.callPackage ./mk-apk.nix { };
 
+  # Native libraries -> a Java-free NativeActivity APK; see mk-native-apk.nix.
+  mkNativeActivityApk = final.callPackage ./mk-native-apk.nix { };
+
+  # 16 KB pages: Android 15+ devices may use them, and NDK 27 still links 4 KB
+  # LOAD segments by default (r28 flips it). Every link in this set asks for 16 KB,
+  # the way the NDK wrapper already passes its other -z flags.
+  stdenv = prev.overrideCC prev.stdenv (prev.stdenv.cc.override (old: {
+    extraBuildCommands = (old.extraBuildCommands or "") + ''
+      echo "-z,max-page-size=16384" >> $out/nix-support/cc-ldflags
+    '';
+  }));
+
   # `enableKTLS ? hostPlatform.isLinux` is true for Android, and bionic has none
   # of the kernel-TLS socket plumbing openssl's internal/ktls.h assumes
   # (SOL_TCP, struct msghdr, CMSG_*). Qt only needs libssl/libcrypto.
@@ -209,6 +222,40 @@ lib.optionalAttrs isCross {
       (builtins.filter (f: !(lib.hasPrefix "--enable-jit=" f)) (old.configureFlags or [ ]))
       ++ [ "--enable-jit=no" ];
   });
+
+  # spdlog's own tests link Catch2, which wants Android's liblog; the library
+  # itself does not.
+  spdlog = prev.spdlog.overrideAttrs (old: {
+    cmakeFlags =
+      (builtins.filter (f: !(lib.hasInfix "SPDLOG_BUILD_TESTS" f)) (old.cmakeFlags or [ ]))
+      ++ [ "-DSPDLOG_BUILD_TESTS=OFF" ];
+    doCheck = false;
+  });
+
+  # b2 has no bionic target: it builds for "linux", which links -lrt and
+  # -lpthread, and bionic keeps both in libc. Empty archives answer that.
+  # Libraries the Logos runtime does not link are skipped; the headers all install.
+  boost =
+    let
+      emptyRt = final.runCommandCC "empty-librt-libpthread" { } ''
+        mkdir -p $out/lib
+        $AR rcs $out/lib/librt.a
+        $AR rcs $out/lib/libpthread.a
+      '';
+    in
+    prev.boost.override {
+      # (--with-* would clash with the recipe's own --without-python.)
+      extraB2Args = [ "linkflags=-L${emptyRt}/lib" ]
+        ++ map (l: "--without-${l}") [
+          "graph" "graph_parallel" "mpi" "stacktrace" "test" "wave" "locale" "log" "iostreams"
+          "fiber" "cobalt" "coroutine" "contract" "program_options" "serialization"
+          "type_erasure" "timer" "json" "url" "regex" "random" "math" "nowide" "charconv"
+        ];
+    };
+
+  # onetbb drags in hwloc -> pciutils, kmod and ncurses, none of which build
+  # against bionic; BLAKE3 only uses it to hash in parallel.
+  libblake3 = prev.libblake3.override { useTBB = false; };
 
   # Identical to the Windows overlay's fix and for the same reason: sqlite uses
   # `hostPlatform.isStatic` as a proxy for "tcl is unavailable", which does not
