@@ -43,6 +43,11 @@
   # E.g. "singleTask": android_main runs once per process, so a second
   # instance must not start.
   launchMode ? null,
+  # Java sources compiled into classes.dex, e.g. a NativeActivity subclass
+  # (named by `activity`) that overrides what NativeActivity drops, such as
+  # onNewIntent.
+  javaSources ? [ ],
+  activity ? "android.app.NativeActivity",
   versionCode ? 1,
 }:
 
@@ -58,9 +63,9 @@ let
         android:versionName="${version}">
       <uses-sdk android:minSdkVersion="${toString minSdk}" android:targetSdkVersion="${toString targetSdk}"/>
     ${lib.concatMapStrings (p: "  <uses-permission android:name=\"${p}\"/>\n") permissions}
-      <application android:label="${label}" android:hasCode="false"
+      <application android:label="${label}" android:hasCode="${lib.boolToString (javaSources != [ ])}"
           android:extractNativeLibs="true" android:debuggable="true">
-        <activity android:name="android.app.NativeActivity" android:exported="true"${lib.optionalString (launchMode != null) " android:launchMode=\"${launchMode}\""}
+        <activity android:name="${activity}" android:exported="true"${lib.optionalString (launchMode != null) " android:launchMode=\"${launchMode}\""}
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode"
             android:windowSoftInputMode="adjustResize">
           <meta-data android:name="android.app.lib_name" android:value="${libName}"/>
@@ -129,7 +134,13 @@ runCommand "${pname}-${version}.apk"
     ${buildTools}/aapt2 link -o "$work/base.apk" -I ${androidJar} --manifest ${manifest} \
       --min-sdk-version ${toString minSdk} --target-sdk-version ${toString targetSdk} \
       ${lib.optionalString (assets != null) "-A ${assets}"}
-    (cd "$work/apk" && zip -q -r "$work/base.apk" lib)
+    ${lib.optionalString (javaSources != [ ]) ''
+      mkdir -p "$work/classes" "$work/dex"
+      javac -source 8 -target 8 -nowarn -Xlint:-options -cp ${androidJar} -d "$work/classes" ${lib.escapeShellArgs (map toString javaSources)}
+      ${buildTools}/d8 --min-api ${toString minSdk} --lib ${androidJar} --output "$work/dex" $(find "$work/classes" -name '*.class')
+      cp "$work/dex/classes.dex" "$work/apk/"
+    ''}
+    (cd "$work/apk" && zip -q -r "$work/base.apk" lib && if [ -e classes.dex ]; then zip -q "$work/base.apk" classes.dex; fi)
     ${buildTools}/zipalign -P 16 -f 4 "$work/base.apk" "$work/aligned.apk"
     export HOME=$work
     ${buildTools}/apksigner sign --ks ${./debug.keystore} --ks-pass pass:android \
