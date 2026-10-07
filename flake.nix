@@ -207,6 +207,11 @@
         fetchCrateStaticCratesIoOverlay
       ];
       mkNativePkgs = system: import nixpkgs { inherit system; overlays = nativeOverlays; };
+      # One package set per system for this logos-nix node, shared by every
+      # forAllSystems/forAllTargets caller. Importing per call gave each
+      # consumer flake its own nixpkgs evaluation (~0.5 s and ~70 MB each;
+      # basecamp's eval made 119 of them).
+      nativePkgsFor = nixpkgs.lib.genAttrs supportedSystems mkNativePkgs;
 
       # Package set targeting Windows, built FROM `buildSystem`.
       #
@@ -225,7 +230,7 @@
       # aarch64-darwin needs it.
       needsNativeOverlay = buildSystem: buildSystem == "aarch64-darwin";
 
-      mkWindowsPkgs =
+      mkWindowsPkgsUncached =
         { buildSystem
         , libc ? windowsCrossSystem.libc
         }: import nixpkgs-windows {
@@ -236,11 +241,23 @@
           crossOverlays = [ windowsCrossOverlay ]; # HOST-side fixes
         };
 
+      # Memoized per build system for the default libc, like nativePkgsFor;
+      # any other libc (logos-delivery's msvcrt) still gets its own instance.
+      windowsPkgsFor = nixpkgs.lib.genAttrs supportedSystems
+        (buildSystem: mkWindowsPkgsUncached { inherit buildSystem; });
+      mkWindowsPkgs =
+        { buildSystem
+        , libc ? windowsCrossSystem.libc
+        }:
+        if libc == windowsCrossSystem.libc && windowsPkgsFor ? ${buildSystem}
+        then windowsPkgsFor.${buildSystem}
+        else mkWindowsPkgsUncached { inherit buildSystem libc; };
+
       forAllSystems = f:
         nixpkgs.lib.genAttrs supportedSystems (system:
           f {
             inherit system;
-            pkgs = mkNativePkgs system;
+            pkgs = nativePkgsFor.${system};
           });
 
       # forAllSystems, plus the Windows target keyed under the pseudo-system
@@ -259,12 +276,12 @@
           if system == "x86_64-windows" then
             f {
               inherit system;
-              pkgs = mkWindowsPkgs { buildSystem = "x86_64-linux"; };
+              pkgs = windowsPkgsFor.x86_64-linux;
             }
           else
             f {
               inherit system;
-              pkgs = mkNativePkgs system;
+              pkgs = nativePkgsFor.${system};
             });
     in
     {
@@ -273,6 +290,8 @@
           supportedSystems
           forAllSystems
           forAllTargets
+          nativePkgsFor
+          windowsPkgsFor
           mkWindowsPkgs
           nativeOverlays
           windowsBuildSystems
@@ -307,8 +326,8 @@
 
       # nix build .#legacyPackages.x86_64-linux.pkgsWindows.qt6.qtbase
       legacyPackages = nixpkgs.lib.genAttrs supportedSystems (system:
-        (mkNativePkgs system) // {
-          pkgsWindows = mkWindowsPkgs { buildSystem = system; };
+        nativePkgsFor.${system} // {
+          pkgsWindows = windowsPkgsFor.${system};
         } // nixpkgs.lib.optionalAttrs (builtins.elem system iosBuildSystems) {
           pkgsIosSimulator = mkIosPkgs { buildSystem = system; };
           pkgsIos = mkIosPkgs { buildSystem = system; target = "aarch64-ios"; };
