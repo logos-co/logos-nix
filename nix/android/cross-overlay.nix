@@ -92,6 +92,21 @@ let
     "-DGLESv2_INCLUDE_DIR=${ndkSysroot}/usr/include"
   ];
 
+  # The NDK sysroot's usr/include must never be passed as -I: it would come
+  # before libc++'s headers and break <cstdint>. CMake drops -I for dirs in
+  # CMAKE_<LANG>_IMPLICIT_INCLUDE_DIRECTORIES, but learns that list from the
+  # compiler, which reports the sysroot under another store path than
+  # ndkSysroot. So the dirs in androidGlFlags were not recognised. Add
+  # ndkSysroot's path to the list.
+  ndkSysrootImplicitInclude = buildPkgs.writeText "ndk-sysroot-implicit-include.cmake" ''
+    foreach(lang C CXX)
+      if(CMAKE_''${lang}_COMPILER_LOADED)
+        list(APPEND CMAKE_''${lang}_IMPLICIT_INCLUDE_DIRECTORIES "${ndkSysroot}/usr/include")
+        list(REMOVE_DUPLICATES CMAKE_''${lang}_IMPLICIT_INCLUDE_DIRECTORIES)
+      endif()
+    endforeach()
+  '';
+
   androidToolchainFile = "${ndkRoot}/build/cmake/android.toolchain.cmake";
 
   # -D flags only; CMAKE_TOOLCHAIN_FILE must be present in a build tree's first
@@ -371,6 +386,7 @@ lib.optionalAttrs isCross {
       # package. One ABI in this slice; adding another means adding a whole
       # pseudo-system, not extending this list (see README).
       "-DQT_ANDROID_ABIS=${abi}"
+      "-DCMAKE_PROJECT_INCLUDE=${ndkSysrootImplicitInclude}"
     ]
   );
 }
