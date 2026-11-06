@@ -75,8 +75,27 @@
       # and build are part of every iOS derivation's hash via
       # nix/ios/xcode-wrapper.nix. Only aarch64-darwin can build these.
       # See nix/ios/cross-overlay.nix.
-      iosXcodeVersion = "26.6";
-      iosXcodeBuild = "17F113";
+      #
+      # Which Xcode. Pure evaluation: the declared default. With --impure: the
+      # installed /Applications/Xcode.app, else the default.
+      iosXcodeDefault = { version = "26.6"; build = "17F113"; };
+      iosXcodePlist = "/Applications/Xcode.app/Contents/version.plist";
+      resolveXcode = plistText:
+        let
+          plistValue = key:
+            let m = if plistText == null then null
+              else builtins.match ".*<key>${key}</key>[[:space:]]*<string>([^<]*)</string>.*" plistText;
+            in if m == null then null else builtins.head m;
+          installed = { version = plistValue "CFBundleShortVersionString"; build = plistValue "ProductBuildVersion"; };
+        in
+          if installed.version != null && installed.build != null then installed else iosXcodeDefault;
+      # currentSystem exists only under --impure; older Nix throws on an
+      # absolute pathExists in pure mode.
+      iosXcode = resolveXcode (
+        if builtins ? currentSystem && builtins.pathExists iosXcodePlist
+        then builtins.readFile iosXcodePlist else null);
+      iosXcodeVersion = iosXcode.version;
+      iosXcodeBuild = iosXcode.build;
       iosBuildSystems = [ "aarch64-darwin" ];
       iosCrossSystems = {
         aarch64-ios-simulator = {
@@ -586,6 +605,16 @@
                   != i.qt6.qtbase.drvPath
                   && (mkIosPkgs { buildSystem = system; xcodeBuild = "0A0"; }).qt6.qtbase.drvPath
                   != i.qt6.qtbase.drvPath;
+              }
+              {
+                name = "Xcode resolution: the installed plist, else the default";
+                ok =
+                  let
+                    plist = v: b: "<dict>\n\t<key>CFBundleShortVersionString</key>\n\t<string>${v}</string>\n\t<key>ProductBuildVersion</key>\n\t<string>${b}</string>\n</dict>";
+                  in
+                    resolveXcode null == iosXcodeDefault
+                    && resolveXcode (plist "99.1" "99A1") == { version = "99.1"; build = "99A1"; }
+                    && resolveXcode "<dict></dict>" == iosXcodeDefault;
               }
               {
                 name = "cross flags carry host Qt and the simulator SDK";
