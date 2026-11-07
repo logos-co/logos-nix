@@ -22,6 +22,7 @@ let
     _installed="$_installed ($(/usr/bin/plutil -extract ProductBuildVersion raw "$_plist" 2>/dev/null || true))"
     if [ "$_installed" != "${xcodeVersion} (${xcodeBuild})" ]; then
       echo "xcode-wrapper: declared Xcode ${xcodeVersion} (${xcodeBuild}), but ${xcodeBaseDir} is Xcode $_installed" >&2
+      echo "xcode-wrapper: evaluate with --impure to use the installed Xcode" >&2
       exit 1
     fi
     export DEVELOPER_DIR="${developerDir}"
